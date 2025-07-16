@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gravi-Sketch Playground</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #f0f0f0;
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        canvas {
+            border: 2px solid #333;
+            background-color: #fff;
+            touch-action: none; /* Prevent scrolling on canvas drag */
+            max-width: 90vw; /* Responsive width */
+            max-height: 70vh; /* Responsive height */
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            padding: 10px;
+            background-color: #e9e9e9;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .control-group label {
+            font-size: 0.9em;
+            margin-bottom: 5px;
+            color: #333;
+            white-space: nowrap; /* Prevent text wrapping */
+        }
+        .controls button {
+            padding: 10px 18px;
+            font-size: 1em;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #007bff;
+            color: white;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .controls button:hover {
+            background-color: #0056b3;
+            transform: translateY(-1px);
+        }
+        .controls button:active {
+            transform: translateY(1px);
+        }
+        .controls button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
+        }
+        input[type="range"] {
+            width: 120px;
+            -webkit-appearance: none;
+            height: 8px;
+            border-radius: 5px;
+            background: #d3d3d3;
+            outline: none;
+            opacity: 0.7;
+            transition: opacity .2s;
+        }
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #007bff;
+            cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #007bff;
+            cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="graviSketchCanvas"></canvas>
+
+    <div class="controls">
+        <div class="control-group">
+            <label for="gravitySlider">Gravity: <span id="gravityValue">0.50</span></label>
+            <input type="range" id="gravitySlider" min="0" max="1" step="0.05" value="0.5">
+        </div>
+        <div class="control-group">
+            <label for="densitySlider">New Shape Density: <span id="densityValue">1.0</span></label>
+            <input type="range" id="densitySlider" min="0.1" max="10" step="0.1" value="1">
+        </div>
+        <div class="control-group">
+            <label for="restitutionSlider">New Shape Bounce: <span id="restitutionValue">0.70</span></label>
+            <input type="range" id="restitutionSlider" min="0" max="1" step="0.05" value="0.7">
+        </div>
+        <button id="togglePhysicsButton">Activate Physics</button>
+        <button id="clearCanvasButton">Clear Canvas</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('graviSketchCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Physics parameters, adjustable via UI
+        let physicsActive = false;
+        let gravity = 0.5; // Pixels per second^2, represents downward acceleration
+        let newShapeDensity = 1; // Default density for newly drawn shapes
+        let newShapeRestitution = 0.7; // Default bounce (coefficient of restitution) for new shapes
+
+        // Simulation objects and state
+        const bodies = []; // Array to hold all physics bodies
+        let lastTime = 0; // Timestamp of the last animation frame
+        const dt = 1 / 60; // Fixed time step for physics update (60 FPS for stability)
+        let accumulator = 0; // Accumulator for fixed time step simulation
+
+        // Drawing state
+        let isDrawing = false; // True when user is actively drawing a shape
+        let currentPath = []; // Stores points of the current drawing
+        const minPolygonVertices = 3; // Minimum vertices required to form a valid polygon
+
+        // UI element references
+        const gravitySlider = document.getElementById('gravitySlider');
+        const gravityValueSpan = document.getElementById('gravityValue');
+        const densitySlider = document.getElementById('densitySlider');
+        const densityValueSpan = document.getElementById('densityValue');
+        const restitutionSlider = document.getElementById('restitutionSlider');
+        const restitutionValueSpan = document.getElementById('restitutionValue');
+        const togglePhysicsButton = document.getElementById('togglePhysicsButton');
+        const clearCanvasButton = document.getElementById('clearCanvasButton');
+
+        // --- Utility Vector Functions ---
+        // Basic 2D vector operations
+        function vecSubtract(v1, v2) { return { x: v1.x - v2.x, y: v1.y - v2.y }; }
+        function vecAdd(v1, v2) { return { x: v1.x + v2.x, y: v1.y + v2.y }; }
+        function vecScale(v, s) { return { x: v.x * s, y: v.y * s }; }
+        function vecDot(v1, v2) { return v1.x * v2.x + v1.y * v2.y; }
+        function vecMagnitude(v) { return Math.sqrt(v.x * v.x + v.y * v.y); }
+        function vecNormalize(v) {
+            const mag = vecMagnitude(v);
+            return mag === 0 ? { x: 0, y: 0 } : { x: v.x / mag, y: v.y / mag };
+        }
+        function vecPerp(v) { return { x: -v.y, y: v.x }; } // Perpendicular vector (used for edge normals)
+
+        // --- Body Class: Represents a single physical object ---
+        class Body {
+            constructor(vertices, density, restitution, isStatic = false) {
+                // Store initial vertices relative to its own local origin (centroid)
+                this.initialVertices = this.cloneVertices(vertices);
+                this.isStatic = isStatic; // If true, body does not move or rotate
+                this.density = density;
+                this.restitution = restitution; // How bouncy the object is (0 = no bounce, 1 = perfect bounce)
+
+                // Calculate initial position (centroid) and adjust vertices relative to it
+                this.position = this.calculateCentroid(this.initialVertices);
+                this.initialVertices = this.initialVertices.map(v => vecSubtract(v, this.position));
+
+                this.velocity = { x: 0, y: 0 }; // Linear velocity
+                this.angle = 0; // Current rotation angle in radians
+                this.angularVelocity = 0; // Rotational velocity
+
+                // Calculate mass and inertia for physics calculations
+                this.mass = this.isStatic ? Infinity : this.calculateMass();
+                this.inertia = this.isStatic ? Infinity : this.calculateInertia();
+                this.invMass = this.isStatic ? 0 : 1 / this.mass; // Inverse mass for efficiency
+                this.invInertia = this.isStatic ? 0 : 1 / this.inertia; // Inverse inertia
+
+                this.color = `hsl(${Math.random() * 360}, 70%, 50%)`; // Random color for visual distinction
+
+                // Calculate current world-space vertices based on position and angle
+                this.updateTransformedVertices();
+            }
+
+            // Helper to create a deep copy of vertices array
+            cloneVertices(vertices) {
+                return vertices.map(v => ({ x: v.x, y: v.y }));
+            }
+
+            // Calculate the geometric centroid of a polygon
+            calculateCentroid(verts) {
+                let cx = 0, cy = 0, area = 0;
+                for (let i = 0; i < verts.length; i++) {
+                    const p1 = verts[i];
+                    const p2 = verts[(i + 1) % verts.length]; // Next vertex, wraps around for last
+                    const crossProduct = p1.x * p2.y - p2.x * p1.y; // Cross product component
+                    area += crossProduct;
+                    cx += (p1.x + p2.x) * crossProduct;
+                    cy += (p1.y + p2.y) * crossProduct;
+                }
+                area /= 2; // Signed area of the polygon
+                // Handle degenerate polygons (area is zero or close to zero)
+                if (Math.abs(area) < 0.001) {
+                    return { x: verts[0] ? verts[0].x : 0, y: verts[0] ? verts[0].y : 0 };
+                }
+                return { x: cx / (3 * area), y: cy / (3 * area) };
+            }
+
+            // Calculate mass based on polygon's area and density
+            calculateMass() {
+                let area = 0;
+                for (let i = 0; i < this.initialVertices.length; i++) {
+                    const p1 = this.initialVertices[i];
+                    const p2 = this.initialVertices[(i + 1) % this.initialVertices.length];
+                    area += (p1.x * p2.y - p2.x * p1.y);
+                }
+                return Math.abs(area / 2) * this.density; // Area * density
+            }
+
+            // Calculate the moment of inertia for a polygon about its centroid
+            // This uses a standard formula for polygonal inertia (relative to centroid).
+            calculateInertia() {
+                let sumNumerator = 0; // Sum of (cross_product * (sum_of_squares_of_vertices))
+                let sumDenominator = 0; // Sum of cross_product (which is 2 * area)
+                const N = this.initialVertices.length;
+
+                for (let i = 0; i < N; i++) {
+                    const p1 = this.initialVertices[i];
+                    const p2 = this.initialVertices[(i + 1) % N];
+
+                    const crossProduct = p1.x * p2.y - p2.x * p1.y;
+                    sumNumerator += crossProduct * (
+                        p1.x * p1.x + p1.x * p2.x + p2.x * p2.x +
+                        p1.y * p1.y + p1.y * p2.y + p2.y * p2.y
+                    );
+                    sumDenominator += crossProduct; // This accumulates 2 * signed area
+                }
+                // Avoid division by zero for degenerate polygons
+                if (Math.abs(sumDenominator) < 0.001) return 1; // Return a minimal inertia
+
+                return (this.density / 12) * sumNumerator;
+            }
+
+            // Transforms initial (local) vertices to current world-space vertices based on position and angle
+            updateTransformedVertices() {
+                const cos = Math.cos(this.angle);
+                const sin = Math.sin(this.angle);
+                this.vertices = this.initialVertices.map(v => {
+                    // Apply rotation then translation
+                    return {
+                        x: this.position.x + (v.x * cos - v.y * sin),
+                        y: this.position.y + (v.x * sin + v.y * cos)
+                    };
+                });
+            }
+
+            // Applies gravity and updates position/rotation based on velocity/angularVelocity
+            update(dt, gravity) {
+                if (this.isStatic) return; // Static bodies don't move
+
+                this.velocity.y += gravity * dt; // Apply gravity (downwards)
+                this.position.x += this.velocity.x * dt; // Update x position
+                this.position.y += this.velocity.y * dt; // Update y position
+                this.angle += this.angularVelocity * dt; // Update rotation angle
+
+                this.updateTransformedVertices(); // Recalculate vertex positions in world space
+            }
+
+            // Renders the body on the canvas
+            render(ctx) {
+                ctx.fillStyle = this.color;
+                ctx.strokeStyle = "black";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(this.vertices[0].x, this.vertices[0].y);
+                for (let i = 1; i < this.vertices.length; i++) {
+                    ctx.lineTo(this.vertices[i].x, this.vertices[i].y);
+                }
+                ctx.closePath(); // Close the polygon path
+                ctx.fill(); // Fill the shape
+                ctx.stroke(); // Draw the outline
+
+                // Draw center point for visual debugging of centroid
+                ctx.fillStyle = "rgba(0,0,0,0.5)";
+                ctx.beginPath();
+                ctx.arc(this.position.x, this.position.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // --- Collision Detection (Separating Axis Theorem - SAT) ---
+        // Projects a polygon's vertices onto a given axis and returns min/max projected values
+        function getProjection(vertices, axis) {
+            let min = vecDot(vertices[0], axis);
+            let max = min;
+            for (let i = 1; i < vertices.length; i++) {
+                const p = vecDot(vertices[i], axis);
+                if (p < min) min = p;
+                else if (p > max) max = p;
+            }
+            return { min, max };
+        }
+
+        // Checks if two 1D projections overlap
+        function checkOverlap(proj1, proj2) {
+            return proj1.max >= proj2.min && proj2.max >= proj1.min;
+        }
+
+        // Calculates the amount of overlap between two 1D projections
+        function getOverlapAmount(proj1, proj2) {
+            return Math.min(proj1.max, proj2.max) - Math.max(proj1.min, proj2.min);
+        }
+
+        // Generates the set of unique normalized axes (normals to edges) for a polygon
+        function getAxes(vertices) {
+            const axes = [];
+            for (let i = 0; i < vertices.length; i++) {
+                const p1 = vertices[i];
+                const p2 = vertices[(i + 1) % vertices.length];
+                const edge = vecSubtract(p2, p1);
+                const normal = vecNormalize(vecPerp(edge)); // Normal is perpendicular to edge
+                axes.push(normal);
+            }
+            return axes;
+        }
+
+        // Detects collision between two bodies using SAT
+        function detectCollision(bodyA, bodyB) {
+            if (bodyA.isStatic && bodyB.isStatic) return null; // No collision if both are static
+
+            let minOverlap = Infinity;
+            let collisionNormal = null;
+
+            // Collect all potential separating axes from both polygons
+            const axes1 = getAxes(bodyA.vertices);
+            const axes2 = getAxes(bodyB.vertices);
+            const allAxes = axes1.concat(axes2);
+
+            // Iterate through all axes to find a separating axis
+            for (const axis of allAxes) {
+                const proj1 = getProjection(bodyA.vertices, axis);
+                const proj2 = getProjection(bodyB.vertices, axis);
+
+                if (!checkOverlap(proj1, proj2)) {
+                    // Found a separating axis, so no collision
+                    return null;
+                }
+
+                const overlap = getOverlapAmount(proj1, proj2);
+                if (overlap < minOverlap) {
+                    minOverlap = overlap;
+                    collisionNormal = axis; // Store the axis with minimum overlap (MTV axis)
+                }
+            }
+
+            // Ensure the collision normal points from bodyA towards bodyB
+            const centerToCenter = vecSubtract(bodyB.position, bodyA.position);
+            if (vecDot(centerToCenter, collisionNormal) < 0) {
+                collisionNormal = vecScale(collisionNormal, -1);
+            }
+
+            // Collision detected, return collision data
+            return {
+                bodyA: bodyA,
+                bodyB: bodyB,
+                normal: collisionNormal, // Minimum Translation Vector (MTV) normal
+                penetration: minOverlap // Depth of penetration along the MTV normal
+            };
+        }
+
+        // --- Collision Resolution ---
+        // Resolves a detected collision by applying impulses
+        function resolveCollision(collision) {
+            const { bodyA, bodyB, normal, penetration } = collision;
+
+            // 1. Separate bodies to resolve penetration
+            const totalInvMass = bodyA.invMass + bodyB.invMass;
+            if (totalInvMass === 0) return; // Should not happen if at least one body is non-static
+
+            // Calculate correction vector based on penetration depth and inverse masses
+            const correction = vecScale(normal, penetration / totalInvMass * 0.8); // 0.8 is a bias factor for stability
+            if (!bodyA.isStatic) bodyA.position = vecSubtract(bodyA.position, vecScale(correction, bodyA.invMass));
+            if (!bodyB.isStatic) bodyB.position = vecAdd(bodyB.position, vecScale(correction, bodyB.invMass));
+
+            // Update vertices after position adjustment to reflect new positions for subsequent calculations
+            bodyA.updateTransformedVertices();
+            bodyB.updateTransformedVertices();
+
+            // 2. Calculate impulse for collision response (linear and angular)
+
+            // Relative velocity of bodyB with respect to bodyA
+            const rv = vecSubtract(bodyB.velocity, bodyA.velocity);
+            // Component of relative velocity along the collision normal
+            const velAlongNormal = vecDot(rv, normal);
+
+            // If bodies are moving apart, no impulse is needed
+            if (velAlongNormal > 0) return;
+
+            // Coefficient of restitution (bounciness)
+            const e = Math.min(bodyA.restitution, bodyB.restitution);
+
+            // Calculate impulse magnitude for linear component
+            // J = -(1 + e) * V_rel_normal / (1/mA + 1/mB)  (simplified for point masses)
+            // For polygons, this would typically involve relative velocity at the contact point and effective mass
+            // that includes rotational inertia. For simplicity, we use the linear impulse here, and
+            // a heuristic for angular impulse.
+            let j = -(1 + e) * velAlongNormal;
+            j /= (bodyA.invMass + bodyB.invMass); // This is only for linear components
+
+            const impulse = vecScale(normal, j);
+
+            // Apply linear impulse
+            if (!bodyA.isStatic) bodyA.velocity = vecSubtract(bodyA.velocity, vecScale(impulse, bodyA.invMass));
+            if (!bodyB.isStatic) bodyB.velocity = vecAdd(bodyB.velocity, vecScale(impulse, bodyB.invMass));
+
+            // 3. Apply Friction Impulse
+            const tangent = vecPerp(normal); // Tangent vector (perpendicular to normal)
+            const relativeTangentVelocity = vecDot(rv, tangent); // Relative velocity along tangent
+
+            const sf = 0.5; // Static friction coefficient
+            const df = 0.3; // Dynamic friction coefficient
+
+            let frictionImpulseScalar = -relativeTangentVelocity;
+            frictionImpulseScalar /= (bodyA.invMass + bodyB.invMass); // Simplified inverse mass for friction
+
+            let frictionMagnitude;
+            if (Math.abs(frictionImpulseScalar) < j * sf) {
+                // Apply static friction if relative tangential velocity is low enough
+                frictionMagnitude = frictionImpulseScalar;
+            } else {
+                // Apply dynamic friction if sliding
+                frictionMagnitude = -j * df * Math.sign(relativeTangentVelocity);
+            }
+            const frictionImpulse = vecScale(tangent, frictionMagnitude);
+
+            if (!bodyA.isStatic) {
+                bodyA.velocity = vecSubtract(bodyA.velocity, vecScale(frictionImpulse, bodyA.invMass));
+            }
+            if (!bodyB.isStatic) {
+                bodyB.velocity = vecAdd(bodyB.velocity, vecScale(frictionImpulse, bodyB.invMass));
+            }
+
+            // 4. Apply Simplified Angular Impulse
+            // This is a heuristic to simulate tumbling without precise contact points.
+            // It applies an angular impulse proportional to the linear impulse and the "off-centeredness"
+            // of the collision, approximated by the dot product of the perpendicular normal and relative velocity.
+            const angularFactor = 0.00001; // Small scaling factor to control rotational intensity
+            if (!bodyA.isStatic) {
+                bodyA.angularVelocity -= vecDot(vecPerp(normal), rv) * bodyA.invInertia * angularFactor * j;
+            }
+            if (!bodyB.isStatic) {
+                // Apply opposite angular impulse to the other body
+                bodyB.angularVelocity += vecDot(vecPerp(normal), rv) * bodyB.invInertia * angularFactor * j;
+            }
+        }
+
+
+        // --- Canvas & Game Loop ---
+
+        // Resizes the canvas to fit the window while maintaining max dimensions
+        function resizeCanvas() {
+            canvas.width = window.innerWidth * 0.8;
+            canvas.height = window.innerHeight * 0.7;
+            if (canvas.width > 800) canvas.width = 800;
+            if (canvas.height > 600) canvas.height = 600;
+        }
+
+        // Updates the physics simulation
+        function updatePhysics(deltaTime) {
+            accumulator += deltaTime;
+
+            // Use a fixed time step loop for stable physics
+            while (accumulator >= dt) {
+                // Update all bodies (apply gravity, update positions/velocities)
+                for (const body of bodies) {
+                    body.update(dt, gravity);
+                }
+
+                // Check and resolve collisions between all pairs of bodies
+                for (let i = 0; i < bodies.length; i++) {
+                    for (let j = i + 1; j < bodies.length; j++) {
+                        const collision = detectCollision(bodies[i], bodies[j]);
+                        if (collision) {
+                            resolveCollision(collision);
+                        }
+                    }
+                }
+
+                // Handle collisions with canvas boundaries
+                for (const body of bodies) {
+                    if (body.isStatic) continue;
+
+                    let hitWall = false;
+                    const bounciness = body.restitution;
+                    const friction = 0.3; // Simple friction for walls
+
+                    // Find min/max x/y coordinates of the body's bounding box
+                    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                    for (const v of body.vertices) {
+                        minX = Math.min(minX, v.x);
+                        maxX = Math.max(maxX, v.x);
+                        minY = Math.min(minY, v.y);
+                        maxY = Math.max(maxY, v.y);
+                    }
+
+                    // Check and resolve collisions with each wall
+                    if (minX < 0) { // Left wall
+                        body.position.x -= minX; // Push out of wall
+                        body.velocity.x *= -bounciness; // Reverse x velocity and apply bounce
+                        body.velocity.y *= (1 - friction); // Apply friction to y velocity
+                        body.angularVelocity *= (1 - friction); // Apply friction to angular velocity
+                        hitWall = true;
+                    }
+                    if (maxX > canvas.width) { // Right wall
+                        body.position.x -= (maxX - canvas.width);
+                        body.velocity.x *= -bounciness;
+                        body.velocity.y *= (1 - friction);
+                        body.angularVelocity *= (1 - friction);
+                        hitWall = true;
+                    }
+                    if (minY < 0) { // Top wall
+                        body.position.y -= minY;
+                        body.velocity.y *= -bounciness;
+                        body.velocity.x *= (1 - friction);
+                        body.angularVelocity *= (1 - friction);
+                        hitWall = true;
+                    }
+                    if (maxY > canvas.height) { // Bottom wall
+                        body.position.y -= (maxY - canvas.height);
+                        body.velocity.y *= -bounciness;
+                        body.velocity.x *= (1 - friction);
+                        body.angularVelocity *= (1 - friction);
+                        hitWall = true;
+                    }
+
+                    if (hitWall) {
+                        body.updateTransformedVertices(); // Update vertices after position correction
+                    }
+                }
+                accumulator -= dt; // Subtract fixed time step from accumulator
+            }
+        }
+
+        // Renders all objects on the canvas
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // Clear the entire canvas
+
+            // Draw all physics bodies
+            for (const body of bodies) {
+                body.render(ctx);
+            }
+
+            // Draw the current path being drawn by the user
+            if (isDrawing && currentPath.length > 0) {
+                ctx.strokeStyle = 'blue';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(currentPath[0].x, currentPath[0].y);
+                for (let i = 1; i < currentPath.length; i++) {
+                    ctx.lineTo(currentPath[i].x, currentPath[i].y);
+                }
+                ctx.stroke();
+            }
+        }
+
+        // Main animation loop, called by requestAnimationFrame
+        function gameLoop(currentTime) {
+            // Calculate delta time in seconds
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            if (physicsActive) {
+                updatePhysics(deltaTime); // Update physics only if active
+            }
+
+            render(); // Always render to show current state (even if physics is paused)
+            requestAnimationFrame(gameLoop); // Request next animation frame
+        }
+
+        // --- Event Listeners for User Interaction ---
+
+        // Handle canvas resizing
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas(); // Initial call to set canvas size
+
+        // Mouse events for drawing
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) { // Left mouse button
+                isDrawing = true;
+                currentPath = [{ x: e.offsetX, y: e.offsetY }]; // Start path with current mouse position
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (isDrawing) {
+                currentPath.push({ x: e.offsetX, y: e.offsetY }); // Add points to path while drawing
+            }
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            if (isDrawing) {
+                isDrawing = false;
+                // Process the drawn path into a new Body
+                // Filter out very close points to create a more robust polygon
+                const simplifiedPath = [];
+                if (currentPath.length > 0) {
+                    simplifiedPath.push(currentPath[0]);
+                    for (let i = 1; i < currentPath.length; i++) {
+                        const lastPoint = simplifiedPath[simplifiedPath.length - 1];
+                        const currentPoint = currentPath[i];
+                        const dist = vecMagnitude(vecSubtract(lastPoint, currentPoint));
+                        if (dist > 5) { // Only add points if sufficiently far from the last
+                            simplifiedPath.push(currentPoint);
+                        }
+                    }
+                }
+
+                // Ensure enough distinct vertices to form a polygon
+                if (simplifiedPath.length >= minPolygonVertices) {
+                    // If the last point is very close to the first, remove it to prevent a near-duplicate vertex
+                    if (vecMagnitude(vecSubtract(simplifiedPath[0], simplifiedPath[simplifiedPath.length - 1])) < 10) {
+                         simplifiedPath.pop();
+                    }
+                    // Final check before creating body
+                    if (simplifiedPath.length >= minPolygonVertices) {
+                        bodies.push(new Body(simplifiedPath, newShapeDensity, newShapeRestitution));
+                    }
+                }
+                currentPath = []; // Reset current path
+            }
+        });
+
+        // Touch events for drawing on mobile devices
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault(); // Prevent default touch behavior (like scrolling)
+            const touch = e.touches[0];
+            isDrawing = true;
+            // Get touch position relative to canvas
+            currentPath = [{ x: touch.clientX - canvas.offsetLeft, y: touch.clientY - canvas.offsetTop }];
+        }, { passive: false }); // Use passive: false to allow preventDefault
+
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (isDrawing) {
+                const touch = e.touches[0];
+                currentPath.push({ x: touch.clientX - canvas.offsetLeft, y: touch.clientY - canvas.offsetTop });
+            }
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', (e) => {
+            if (isDrawing) {
+                isDrawing = false;
+                // Same logic as mouseup to process the path
+                const simplifiedPath = [];
+                if (currentPath.length > 0) {
+                    simplifiedPath.push(currentPath[0]);
+                    for (let i = 1; i < currentPath.length; i++) {
+                        const lastPoint = simplifiedPath[simplifiedPath.length - 1];
+                        const currentPoint = currentPath[i];
+                        const dist = vecMagnitude(vecSubtract(lastPoint, currentPoint));
+                        if (dist > 5) {
+                            simplifiedPath.push(currentPoint);
+                        }
+                    }
+                }
+
+                if (simplifiedPath.length >= minPolygonVertices) {
+                    if (vecMagnitude(vecSubtract(simplifiedPath[0], simplifiedPath[simplifiedPath.length - 1])) < 10) {
+                         simplifiedPath.pop();
+                    }
+                    if (simplifiedPath.length >= minPolygonVertices) {
+                        bodies.push(new Body(simplifiedPath, newShapeDensity, newShapeRestitution));
+                    }
+                }
+                currentPath = [];
+            }
+        });
+
+        // --- UI Control Handlers ---
+
+        // Gravity slider
+        gravitySlider.addEventListener('input', (e) => {
+            gravity = parseFloat(e.target.value);
+            gravityValueSpan.textContent = gravity.toFixed(2);
+        });
+
+        // New shape density slider
+        densitySlider.addEventListener('input', (e) => {
+            newShapeDensity = parseFloat(e.target.value);
+            densityValueSpan.textContent = newShapeDensity.toFixed(1);
+        });
+
+        // New shape restitution (bounce) slider
+        restitutionSlider.addEventListener('input', (e) => {
+            newShapeRestitution = parseFloat(e.target.value);
+            restitutionValueSpan.textContent = newShapeRestitution.toFixed(2);
+        });
+
+        // Toggle physics simulation on/off
+        togglePhysicsButton.addEventListener('click', () => {
+            physicsActive = !physicsActive;
+            togglePhysicsButton.textContent = physicsActive ? 'Pause Physics' : 'Activate Physics';
+        });
+
+        // Clear all shapes from the canvas
+        clearCanvasButton.addEventListener('click', () => {
+            bodies.length = 0; // Clears the bodies array
+            physicsActive = false; // Stop physics when clearing
+            togglePhysicsButton.textContent = 'Activate Physics';
+            render(); // Immediately clear canvas visually
+        });
+
+        // Start the main game loop
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
